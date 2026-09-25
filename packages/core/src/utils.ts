@@ -14,12 +14,20 @@ export class DisposableList<T extends WeakKey> {
     const sn = ++this.sn
     this.map.set(sn, value)
     this.weak.set(value, sn)
-    return () => this.map.delete(sn)
+    return () => {
+      // Only clear the weak reference if it still points to this sn.
+      // A later push() may have overwritten it with a newer sn.
+      if (this.weak.get(value) === sn) {
+        this.weak.delete(value)
+      }
+      return this.map.delete(sn)
+    }
   }
 
   delete(value: T) {
     const sn = this.weak.get(value)
     if (!sn) return false
+    this.weak.delete(value)
     return this.map.delete(sn)
   }
 
