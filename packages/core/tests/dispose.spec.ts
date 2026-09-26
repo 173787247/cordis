@@ -1,4 +1,4 @@
-import { Context } from '../src'
+import { Context, CordisError, FiberState } from '../src'
 import { expect, describe, it, vi } from 'vitest'
 import { mock } from 'node:test'
 import { sleep, withTimers } from './utils'
@@ -18,6 +18,39 @@ describe('Effects', () => {
     expect(dispose.mock.calls).to.have.length(1)
     await fiber.dispose()
     expect(dispose.mock.calls).to.have.length(1)
+  })
+
+  // a registration made while the owner is unloading lands after `_unload()`
+  // has cleared the list it drains, so it would outlive the teardown that was
+  // supposed to own it
+  it('rejects effect creation while the owner is unloading', async () => {
+    const root = new Context()
+    const disposeDep = root.provide('dep', 1)
+    const late = mock.fn()
+    let stateAtAttempt: FiberState | undefined
+    let error: unknown
+
+    const fiber = root.inject(['dep'], async (ctx) => {
+      ctx.effect(() => () => {
+        try {
+          ctx.effect(() => late, 'late')
+        } catch (reason) {
+          stateAtAttempt = fiber.state
+          error = reason
+        }
+      }, 'outer')
+    })
+    await sleep()
+    expect(fiber.state).to.equal(FiberState.ACTIVE)
+
+    disposeDep()
+    await sleep()
+
+    expect(stateAtAttempt).to.equal(FiberState.UNLOADING)
+    expect(error).to.be.instanceOf(CordisError)
+    expect((error as CordisError).code).to.equal('INACTIVE_EFFECT')
+    expect(late.mock.calls).to.have.length(0)
+    expect(fiber.state).to.equal(FiberState.PENDING)
   })
 
   it('dispose manually', async () => {

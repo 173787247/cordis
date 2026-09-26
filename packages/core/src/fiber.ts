@@ -276,6 +276,13 @@ export class Fiber {
   effect(execute: () => Effect, label?: string): AsyncDisposable<Promise<void>>
   effect(execute: () => Effect, label = 'anonymous'): any {
     this.assertActive()
+    // Registration while the owner is unloading would land after
+    // `_unload()` has already cleared the list it drains, so the effect would
+    // outlive the teardown that was supposed to own it. PENDING and LOADING
+    // stay legal: effects there are drained by the activation that follows.
+    if (this.state === FiberState.UNLOADING) {
+      throw new CordisError('INACTIVE_EFFECT')
+    }
 
     const disposables: Disposable[] = []
     const dispose = () => {
