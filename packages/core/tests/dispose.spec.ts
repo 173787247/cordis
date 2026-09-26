@@ -1,4 +1,4 @@
-import { Context } from '../src'
+import { Context, FiberState } from '../src'
 import { expect, describe, it, vi } from 'vitest'
 import { mock } from 'node:test'
 import { sleep, withTimers } from './utils'
@@ -18,6 +18,24 @@ describe('Effects', () => {
     expect(dispose.mock.calls).to.have.length(1)
     await fiber.dispose()
     expect(dispose.mock.calls).to.have.length(1)
+  })
+
+  // a fiber that never activated still owns whatever an `internal/plugin`
+  // observer registered on it, and `_setEpoch(INACTIVE)` has no transition to
+  // drive for it — the disposables have to be unloaded explicitly
+  it('dispose unloads effects of a fiber that never activated', async () => {
+    const root = new Context()
+    const unloaded = mock.fn()
+    root.on('internal/plugin', (fiber) => {
+      if (!fiber.uid) return
+      fiber.ctx.effect(() => unloaded, 'observer')
+    })
+    const fiber = root.inject(['missing'], () => {})
+    await sleep()
+    expect(fiber.state).to.equal(FiberState.PENDING)
+    await fiber.dispose()
+    expect(unloaded.mock.calls).to.have.length(1)
+    expect(fiber.state).to.equal(FiberState.DISPOSED)
   })
 
   it('dispose manually', async () => {

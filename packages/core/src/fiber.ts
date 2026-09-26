@@ -186,6 +186,19 @@ export class Fiber {
             }
           }
           this._setEpoch(INACTIVE)
+          // A fiber that never activated can still own disposables: an
+          // observer of `internal/plugin` registers effects on it while its
+          // epoch is still INACTIVE, and the `_setEpoch()` above has no
+          // transition to drive because the epoch does not change. Unload
+          // that pre-activation work here; the `_updateState` inside
+          // `_unload()` then settles the state to DISPOSED, which `uid`
+          // being null now makes the derived answer.
+          if (!this.inertia) {
+            this._updateState(() => {
+              this.inertia = this._unload()
+              return FiberState.UNLOADING
+            })
+          }
           // `this.inertia` itself should never reject — both `_reload` and
           // `_unload` swallow their own work errors via `ctx.logger.error`.
           // If it *does* reject, the only remaining cause is the logger
