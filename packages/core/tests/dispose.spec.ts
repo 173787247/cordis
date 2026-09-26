@@ -20,6 +20,29 @@ describe('Effects', () => {
     expect(dispose.mock.calls).to.have.length(1)
   })
 
+  // an observer may dispose the fiber from inside the publication notification,
+  // so the disposer has to exist by then and the constructor must not carry on
+  // into activation afterwards
+  it('lets a publication observer dispose the fiber', async () => {
+    const root = new Context()
+    const applied = mock.fn()
+    let disposedFromObserver = false
+
+    root.on('internal/plugin', (fiber) => {
+      if (fiber.uid === null || disposedFromObserver) return
+      disposedFromObserver = true
+      expect(typeof fiber.dispose).to.equal('function')
+      fiber.dispose()
+    })
+
+    const fiber = root.inject([], async () => { applied() })
+    await sleep()
+
+    expect(disposedFromObserver).to.equal(true)
+    expect(applied.mock.calls).to.have.length(0)
+    expect(fiber.uid).to.equal(null)
+  })
+
   it('dispose manually', async () => {
     const root = new Context()
     const dispose1 = mock.fn()

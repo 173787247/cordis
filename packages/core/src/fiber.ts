@@ -161,21 +161,12 @@ export class Fiber {
         collect,
       }
 
-      this.context.emit('internal/plugin', this)
-
-      for (const name of Object.keys(this.inject)) {
-        this._checkImpl(name)
-      }
-
+      // Publish only after the parent owns a fully assigned disposer: an
+      // observer may dispose this fiber, or its parent, from inside the
+      // notification. Assigning afterwards left `fiber.dispose` undefined at
+      // publication and let the constructor carry on into activation.
       this.dispose = parent.fiber.effect(() => {
         const remove = runtime.fibers.push(this)
-        try {
-          this.config = resolveConfig(runtime, config)
-          this._refresh()
-        } catch (error) {
-          this.ctx.logger.error(error)
-          this._error = error
-        }
         return async () => {
           this.uid = null
           this.context.emit('internal/plugin', this)
@@ -197,6 +188,31 @@ export class Fiber {
           }
         }
       }, 'ctx.plugin()')
+
+      try {
+        this.context.emit('internal/plugin', this)
+      } catch (error) {
+        // Publication failed synchronously. The disposer removes the child from
+        // both the parent and the runtime before control escapes.
+        void Promise.resolve(this.dispose()).catch(reason => this.ctx.logger.error(reason))
+        throw error
+      }
+
+      // An observer may have added to `inject`, so resolve dependencies only
+      // after publication. A reentrant disposal leaves `uid` null and the
+      // parent's fiber unloading; neither may be dragged back into activation.
+      if (this.uid !== null && parent.fiber.state !== FiberState.UNLOADING) {
+        try {
+          this.config = resolveConfig(runtime, config)
+          for (const name of Object.keys(this.inject)) {
+            this._checkImpl(name)
+          }
+          this._refresh()
+        } catch (error) {
+          this.ctx.logger.error(error)
+          this._error = error
+        }
+      }
     } else {
       this.uid = 0
       this.ctx = this.context = parent
