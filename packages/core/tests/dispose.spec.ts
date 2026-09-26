@@ -1,4 +1,4 @@
-import { Context } from '../src'
+import { Context, FiberState } from '../src'
 import { expect, describe, it, vi } from 'vitest'
 import { mock } from 'node:test'
 import { sleep, withTimers } from './utils'
@@ -18,6 +18,38 @@ describe('Effects', () => {
     expect(dispose.mock.calls).to.have.length(1)
     await fiber.dispose()
     expect(dispose.mock.calls).to.have.length(1)
+  })
+
+  // a throwing teardown observer must not starve its peers, and must not abort
+  // the disposal that issued the notification
+  it('contains a throwing teardown observer', async () => {
+    const root = new Context()
+    const errors = mock.fn()
+    ;(root.logger as any).error = errors
+    const seen: string[] = []
+
+    root.on('internal/plugin', (fiber) => {
+      if (fiber.uid !== null) return
+      seen.push('first')
+      throw new Error('observer boom')
+    })
+    root.on('internal/plugin', (fiber) => {
+      if (fiber.uid !== null) return
+      seen.push('second')
+    })
+
+    const cleaned = mock.fn()
+    const fiber = root.inject([], async (ctx) => {
+      ctx.effect(() => cleaned, 'e')
+    })
+    await sleep()
+
+    await fiber.dispose()
+
+    expect(seen).to.deep.equal(['first', 'second'])
+    expect(cleaned.mock.calls).to.have.length(1)
+    expect(fiber.state).to.equal(FiberState.DISPOSED)
+    expect(errors.mock.calls.length).to.be.greaterThan(0)
   })
 
   it('dispose manually', async () => {

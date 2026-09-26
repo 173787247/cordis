@@ -98,6 +98,33 @@ export namespace CordisError {
   } as const
 }
 
+/**
+ * Notify plugin teardown without letting one observer break ownership cleanup.
+ *
+ * `ctx.emit()` runs its listeners in a bare loop, so a listener that throws
+ * aborts the remaining listeners *and* the disposal that issued the
+ * notification — leaving the fiber reporting `ACTIVE` with every effect it
+ * owned still registered. Each observer is therefore contained individually.
+ */
+function emitPluginDisposed(context: Context, fiber: Fiber) {
+  const args: any[] = ['internal/plugin', fiber]
+  let callbacks: Function[]
+  try {
+    callbacks = context.events.dispatch('emit', args)
+  } catch (error) {
+    context.logger.error(error)
+    return
+  }
+  for (const callback of callbacks) {
+    try {
+      const returned = callback(...args)
+      void Promise.resolve(returned).catch(error => context.logger.error(error))
+    } catch (error) {
+      context.logger.error(error)
+    }
+  }
+}
+
 const INACTIVE = '__INACTIVE__'
 
 export class Fiber {
@@ -178,7 +205,7 @@ export class Fiber {
         }
         return async () => {
           this.uid = null
-          this.context.emit('internal/plugin', this)
+          emitPluginDisposed(this.context, this)
           if (this.ctx.registry.has(runtime.callback)) {
             remove()
             if (!runtime.fibers.length) {
